@@ -1,11 +1,17 @@
 import requests
 import threading
+import urllib3.exceptions
+
+
+Rlock = threading.RLock()
 
 
 class ProxyChecker:
-    def __init__(self, proxy_path, timeout, url):
+    def __init__(self, proxy_path, timeout, url, proxy_type):
         self.proxy_list = self.parse_proxies(proxy_path)
         self.working_proxies = []
+
+        self.type = proxy_type
 
         self.timeout = timeout
         self.url = url
@@ -37,7 +43,7 @@ class ProxyChecker:
         p = 0
 
         while p < len(self.proxy_list):
-            if threading.active_count() < 300:
+            if threading.active_count() < 650:
                 threading.Thread(target=self.check_proxy, args=(self.proxy_list[p], )).start()
 
                 p += 1
@@ -51,8 +57,8 @@ class ProxyChecker:
 
     def check_proxy(self, proxy):
         proxy_schema = {
-            'http': f'http://{proxy}',
-            'https': f'http://{proxy}'
+            'http': f'{self.type}://{proxy}',
+            'https': f'{self.type}://{proxy}'
         }
 
         headers = {
@@ -60,9 +66,12 @@ class ProxyChecker:
         }
 
         try:
-            result = requests.get(self.url, timeout=self.timeout, proxies=proxy_schema, headers=headers)
+            result = requests.get(self.url, timeout=self.timeout/1000, proxies=proxy_schema, headers=headers)
 
         except requests.exceptions.RequestException:
+            self.update_status(self.FAILED)
+
+        except urllib3.exceptions.LocationParseError:
             self.update_status(self.FAILED)
 
         else:
@@ -74,21 +83,22 @@ class ProxyChecker:
                 self.update_status(self.FAILED)
 
     def update_status(self, output: int):
-        if output == self.WORKING:
-            self.working += 1
+        with Rlock:
+            if output == self.WORKING:
+                self.working += 1
 
-        elif output == self.FAILED:
-            self.failed += 1
+            elif output == self.FAILED:
+                self.failed += 1
 
-        self.checked += 1
-        self.remaining = len(self.proxy_list) - self.checked
+            self.checked += 1
+            self.remaining = len(self.proxy_list) - self.checked
 
-        print(f'Working: {self.working} | Failed: {self.failed} | Checked: {self.checked} | Remaining: {self.remaining}     ', end='\r')
+            print(f'Working: {self.working} | Failed: {self.failed} | Checked: {self.checked} | Remaining: {self.remaining}     ', end='\r')
 
     def export_proxies(self):
         f = open('./output.txt', 'a')
 
         for proxy in self.working_proxies:
-            f.write(f'{proxy}\n')
+            f.write(f'{proxy}:{self.type}\n')
 
         f.close()
